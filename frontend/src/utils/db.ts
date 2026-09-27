@@ -7,7 +7,7 @@ import { makeSketchDataUrl } from '../types/photo';
 import { newId } from './id';
 
 /** 当前数据结构版本，写入 localStorage 便于回显 */
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const DB_NAME = 'gbfossilprep';
 export const LS_VERSION_KEY = 'gbfossilprep:db-version';
 
@@ -52,6 +52,23 @@ class FossilPrepDB extends Dexie {
           .modify((row: any) => {
             if (!row.issues) row.issues = [];
             if (row.lowThreshold === undefined) row.lowThreshold = 1;
+          });
+      });
+    // v3：材料出库接入复检放行，批次新增 inspections 复检记录
+    this.version(3)
+      .stores({
+        specimens: 'id, specimenNo, taxon, locality, status, createdAt',
+        procedures: 'id, specimenId, seq, stepType, state, startedAt',
+        supplies: 'id, kind, lotNo, name, openedAt',
+        photos: 'id, specimenId, procedureId, stage, capturedAt',
+      })
+      .upgrade(async (tx) => {
+        // 旧档案没有复检信息：一律按「待检」处理，升级后不可再直接领用
+        await tx
+          .table('supplies')
+          .toCollection()
+          .modify((row: any) => {
+            if (!Array.isArray(row.inspections)) row.inspections = [];
           });
       });
   }
@@ -195,6 +212,15 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 40 * day,
       shelfLifeMonths: 36,
       lowThreshold: 2,
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '周慕白',
+          conclusion: 'pass',
+          inspectedAt: now - 38 * day,
+          validUntil: now + 200 * day,
+        },
+      ],
       issues: [
         {
           id: newId('iss'),
@@ -204,6 +230,88 @@ export async function ensureSeedData(): Promise<void> {
           issuedAt: now - 6 * day,
         },
       ],
+    },
+    {
+      // 新批次先待检：复检合格登记前不能领用
+      id: newId('sup'),
+      name: '环氧渗透胶',
+      kind: '胶种',
+      spec: '低粘度 1 kg',
+      lotNo: 'EPX-20250920',
+      qty: 6,
+      unit: '罐',
+      openedAt: now - 3 * day,
+      shelfLifeMonths: 24,
+      lowThreshold: 2,
+      inspections: [],
+      issues: [],
+    },
+    {
+      // 曾放行并领过，后来复检不合格：历史领用保留，后续领用立即拦截
+      id: newId('sup'),
+      name: 'α-氰基丙烯酸酯胶',
+      kind: '胶种',
+      spec: '502 型 20 g',
+      lotNo: 'CA-20250615',
+      qty: 9,
+      unit: '支',
+      openedAt: now - 100 * day,
+      shelfLifeMonths: 18,
+      lowThreshold: 3,
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '周慕白',
+          conclusion: 'fail',
+          inspectedAt: now - 2 * day,
+        },
+        {
+          id: newId('insp'),
+          inspector: '韩听澜',
+          conclusion: 'pass',
+          inspectedAt: now - 80 * day,
+          validUntil: now + 60 * day,
+        },
+      ],
+      issues: [
+        {
+          id: newId('iss'),
+          qty: 2,
+          operator: '林砚秋',
+          specimenNo: 'FP-2024-0058',
+          issuedAt: now - 30 * day,
+        },
+        {
+          id: newId('iss'),
+          qty: 1,
+          operator: '韩听澜',
+          specimenNo: 'FP-2024-0031',
+          issuedAt: now - 55 * day,
+        },
+      ],
+    },
+    {
+      // 复检放行有效期已过：须重新复检合格才能恢复领用
+      id: newId('sup'),
+      name: '聚乙烯醇 PVA',
+      kind: '胶种',
+      spec: '分析纯 250 g',
+      lotNo: 'PVA-20250108',
+      qty: 3,
+      unit: '袋',
+      openedAt: now - 200 * day,
+      shelfLifeMonths: 36,
+      lowThreshold: 1,
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '韩听澜',
+          conclusion: 'pass',
+          inspectedAt: now - 120 * day,
+          validUntil: now - 5 * day,
+        },
+      ],
+      issues: [],
     },
     {
       id: newId('sup'),
@@ -216,6 +324,15 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 60 * day,
       shelfLifeMonths: 60,
       lowThreshold: 2,
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '韩听澜',
+          conclusion: 'pass',
+          inspectedAt: now - 55 * day,
+          validUntil: now + 300 * day,
+        },
+      ],
       issues: [],
     },
     {
@@ -229,6 +346,15 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 90 * day,
       shelfLifeMonths: 120,
       lowThreshold: 5,
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '周慕白',
+          conclusion: 'pass',
+          inspectedAt: now - 85 * day,
+          validUntil: now + 400 * day,
+        },
+      ],
       issues: [],
     },
     {
@@ -242,6 +368,15 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 200 * day,
       shelfLifeMonths: 120,
       lowThreshold: 1,
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '周慕白',
+          conclusion: 'pass',
+          inspectedAt: now - 190 * day,
+          validUntil: now + 500 * day,
+        },
+      ],
       issues: [],
     },
   ];
