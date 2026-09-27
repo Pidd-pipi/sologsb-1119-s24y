@@ -1,7 +1,21 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { newId } from '../utils/id';
-import type { SupplyIssue, SupplyLot, SupplyLotDraft } from '../types/supply';
+import {
+  issueBlockReason,
+  type InspectionVerdict,
+  type SupplyInspection,
+  type SupplyIssue,
+  type SupplyLot,
+  type SupplyLotDraft,
+} from '../types/supply';
+
+interface RegisterInspectionPayload {
+  inspector: string;
+  verdict: InspectionVerdict;
+  inspectedAt: number;
+  validUntil: number;
+}
 
 interface SupplyState {
   items: SupplyLot[];
@@ -9,6 +23,7 @@ interface SupplyState {
   load: () => Promise<void>;
   add: (draft: SupplyLotDraft) => Promise<SupplyLot>;
   issue: (id: string, payload: Omit<SupplyIssue, 'id' | 'issuedAt'>) => Promise<void>;
+  registerInspection: (id: string, payload: RegisterInspectionPayload) => Promise<void>;
   trace: (lotNo: string) => SupplyLot[];
 }
 
@@ -21,7 +36,8 @@ export const useSupplyStore = create<SupplyState>((set, get) => ({
     set({ items, loaded: true });
   },
   async add(draft) {
-    const record: SupplyLot = { ...draft, id: newId('sup'), issues: [] };
+    // 新批次默认待检：无复检记录，登记复检合格结论后才能领用
+    const record: SupplyLot = { ...draft, id: newId('sup'), inspections: [], issues: [] };
     await db.supplies.put(record);
     set({ items: [...get().items, record] });
     return record;
@@ -29,11 +45,26 @@ export const useSupplyStore = create<SupplyState>((set, get) => ({
   async issue(id, payload) {
     const target = get().items.find((it) => it.id === id);
     if (!target) return;
+    // 放行判定兜底：待检 / 过期 / 不合格 / 无库存一律拦下
+    const block = issueBlockReason(target);
+    if (block) throw new Error(block);
     const issue: SupplyIssue = { ...payload, id: newId('iss'), issuedAt: Date.now() };
     const next: SupplyLot = {
       ...target,
       qty: Math.max(0, target.qty - payload.qty),
       issues: [issue, ...target.issues],
+    };
+    await db.supplies.put(next);
+    set({ items: get().items.map((it) => (it.id === id ? next : it)) });
+  },
+  async registerInspection(id, payload) {
+    const target = get().items.find((it) => it.id === id);
+    if (!target) return;
+    const record: SupplyInspection = { ...payload, id: newId('insp') };
+    // 最新结论置顶：放行状态以最近一次复检为准，重新合格即恢复可领用
+    const next: SupplyLot = {
+      ...target,
+      inspections: [record, ...(target.inspections ?? [])],
     };
     await db.supplies.put(next);
     set({ items: get().items.map((it) => (it.id === id ? next : it)) });

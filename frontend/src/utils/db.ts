@@ -7,7 +7,7 @@ import { makeSketchDataUrl } from '../types/photo';
 import { newId } from './id';
 
 /** 当前数据结构版本，写入 localStorage 便于回显 */
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const DB_NAME = 'gbfossilprep';
 export const LS_VERSION_KEY = 'gbfossilprep:db-version';
 
@@ -52,6 +52,23 @@ class FossilPrepDB extends Dexie {
           .modify((row: any) => {
             if (!row.issues) row.issues = [];
             if (row.lowThreshold === undefined) row.lowThreshold = 1;
+          });
+      });
+    // v3：材料批次接入开封后复检放行，老批次无复检记录，按待检处理
+    this.version(3)
+      .stores({
+        specimens: 'id, specimenNo, taxon, locality, status, createdAt',
+        procedures: 'id, specimenId, seq, stepType, state, startedAt',
+        supplies: 'id, kind, lotNo, name, openedAt',
+        photos: 'id, specimenId, procedureId, stage, capturedAt',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('supplies')
+          .toCollection()
+          .modify((row: any) => {
+            // 档案升级后没有复检信息的旧批次一律进入待检，不能再直接领用
+            if (!row.inspections) row.inspections = [];
           });
       });
   }
@@ -195,6 +212,15 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 40 * day,
       shelfLifeMonths: 36,
       lowThreshold: 2,
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '周慕白',
+          verdict: '合格',
+          inspectedAt: now - 20 * day,
+          validUntil: now + 160 * day,
+        },
+      ],
       issues: [
         {
           id: newId('iss'),
@@ -216,6 +242,8 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 60 * day,
       shelfLifeMonths: 60,
       lowThreshold: 2,
+      // 新批次，复检未登记 → 待检
+      inspections: [],
       issues: [],
     },
     {
@@ -229,6 +257,16 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 90 * day,
       shelfLifeMonths: 120,
       lowThreshold: 5,
+      // 曾复检合格，但放行已过期
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '周慕白',
+          verdict: '合格',
+          inspectedAt: now - 200 * day,
+          validUntil: now - 8 * day,
+        },
+      ],
       issues: [],
     },
     {
@@ -242,6 +280,16 @@ export async function ensureSeedData(): Promise<void> {
       openedAt: now - 200 * day,
       shelfLifeMonths: 120,
       lowThreshold: 1,
+      // 最近一次复检不合格 → 禁止领用，重新复检合格后恢复
+      inspections: [
+        {
+          id: newId('insp'),
+          inspector: '周慕白',
+          verdict: '不合格',
+          inspectedAt: now - 3 * day,
+          validUntil: now + 177 * day,
+        },
+      ],
       issues: [],
     },
   ];
